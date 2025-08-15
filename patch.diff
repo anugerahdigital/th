@@ -1,0 +1,73 @@
+ bool StratumClient::send_subscribe() {
+     int id = next_id_++;
+-    char msg[256];
+-    std::snprintf(msg, sizeof(msg),
+-        "{\"id\":%d,\"method\":\"mining.subscribe\",\"params\":[\"thtminer/0.0.1\"]}\n", id);
+-    return send_line(msg);
++    // Некоторые пулы не любят агент в params. Начнём с пустого массива:
++    char msg[128];
++    std::snprintf(msg, sizeof(msg),
++        "{\"id\":%d,\"method\":\"mining.subscribe\",\"params\":[]}\r\n", id);
++    return send_line(msg);
+ }
+ 
+ bool StratumClient::send_authorize(const std::string& user, const std::string& pass) {
+     int id = next_id_++;
+-    std::string payload = "{\"id\":" + std::to_string(id) +
+-        ",\"method\":\"mining.authorize\",\"params\":[\"" + user + "\",\"" + pass + "\"]}\n";
++    std::string payload = "{\"id\":" + std::to_string(id) +
++        ",\"method\":\"mining.authorize\",\"params\":[\"" + user + "\",\"" + pass + "\"]}\r\n";
+     return send_line(payload);
+ }
+
+ void StratumClient::reader_loop() {
+     std::string acc;
+     acc.reserve(4096);
+     char buf[4096];
+
+     while (!stop_) {
+         ssize_t n = ::recv(sock_, buf, sizeof(buf), 0);
+-        if (n <= 0) break; // выключаемся
++        if (n <= 0) {
++            // сервер закрыл соединение или ошибка recv
++            if (!stop_) {
++                std::printf("[STRATUM] disconnected (recv=%zd, errno=%d)\n", n, errno);
++            }
++            break;
++        }
+         acc.append(buf, buf + n);
+         ...
+     }
+ }
+
+ bool StratumClient::connect(const StratumConfig& cfg, std::string& err) {
+     cfg_ = cfg;
+     sock_ = dial_tcp(cfg.host, cfg.port, err);
+     if (sock_ < 0) return false;
+
++    // Немного тюнинга сокета
++    int one = 1;
++    ::setsockopt(sock_, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
++    ::setsockopt(sock_, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one));
++
+     stop_ = false;
+     reader_ = std::thread(&StratumClient::reader_loop, this);
+     return true;
+ }
+
+ if (!stratum_.send_subscribe()) {
+     std::fprintf(stderr, "Failed to send mining.subscribe\n");
+     return 1;
+ }
++std::printf("[STRATUM] >> mining.subscribe\n");
+
+ if (!sc.user.empty()) {
+     if (!stratum_.send_authorize(sc.user, sc.pass)) {
+         std::fprintf(stderr, "Failed to send mining.authorize\n");
+         return 1;
+     }
++    std::printf("[STRATUM] >> mining.authorize user=%s\n", sc.user.c_str());
+ } else {
+     std::fprintf(stderr, "WARNING: --user is empty; authorize is skipped.\n");
+ }
+
